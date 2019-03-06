@@ -4,6 +4,7 @@ import sys
 import backoff
 import pymysql
 import time
+import uuid
 
 
 MAX_TRIES = 5
@@ -16,6 +17,14 @@ class CWBotoWrapper:
     @backoff.on_exception(backoff.expo, ClientError, max_tries=MAX_TRIES)
     def put_log_events(self, **kwargs):
         return self.client.put_log_events(**kwargs)
+
+    @backoff.on_exception(backoff.expo, ClientError, max_tries=MAX_TRIES)
+    def create_log_stream(self, **kwargs):
+        return self.client.create_log_stream(**kwargs)
+
+    @backoff.on_exception(backoff.expo, ClientError, max_tries=MAX_TRIES)
+    def create_log_group(self, **kwargs):
+        return self.client.create_log_group(**kwargs)
 
 
 class EC2BotoWrapper:
@@ -73,39 +82,52 @@ def rds_extractor():
 def rds_controller(rds_list):
     for item in rds_list:
         if item["name"] == "ops-3026":
-            rds_host_endpoint = item["Endpoint"]
-            rds_username = item["Username"]
-            rds_port = item["Port"]
-            connection = pymysql.connect(host=rds_host_endpoint,
-                                         port=rds_port, user=rds_username, password="arbisoft321")
-            cursor = connection.cursor()
-            cursor.execute("""
-                        SELECT *
-                        FROM mysql.slow_log
-                        WHERE start_time > DATE_ADD(NOW(), INTERVAL -1 HOUR);
-                        """)
-            rds_result = cursor.fetchall()
-            cursor.close()
-            connection.close()
-            cw_logs = []
-            sequencetoken = None
-            for tables in rds_result:
-                temp = {}
-                temp["timestamp"] = time.mktime(tables[0].timetuple())
-                temp["message"] = "User@Host: " + str(tables[1]) + \
-                      "Query_time: " + str(tables[2]) + " Lock_time: " + str(tables[3]) + \
-                      " Rows_sent: " + str(tables[4]) + " Rows_examined: " + str(tables[5]) +\
-                      "Slow Query: " + str(tables[10])
-                cw_logs.append(temp)
-            client = CWBotoWrapper()
+        rds_host_endpoint = item["Endpoint"]
+        rds_username = item["Username"]
+        rds_port = item["Port"]
+        connection = pymysql.connect(host=rds_host_endpoint,
+                                    port=rds_port, user=rds_username, password="arbisoft321")
+        cursor = connection.cursor()
+        cursor.execute("""
+                      SELECT *
+                      FROM mysql.slow_log
+                      WHERE start_time > DATE_ADD(NOW(), INTERVAL -1 HOUR);
+                    """)
+        rds_result = cursor.fetchall()
+        cursor.close()
+        connection.close()
+        cw_logs = []
+        sequencetoken = None
+        client = CWBotoWrapper()
+        try:
+            client.create_log_group(logGroupName=rds_host_endpoint)
+            print('Created CloudWatch log group named "%s"', rds_host_endpoint)
+        except ClientError:
+            print('CloudWatch log group named "%s" already exists', rds_host_endpoint)
+        LOG_STREAM = time.strftime('%Y-%m-%d') + "/[$LATEST]" + uuid.uuid4().hex
+        client.create_log_stream(logGroupName=rds_host_endpoint, logStreamName=LOG_STREAM)
+        for tables in rds_result:
+            temp = {}
+            temp["timestamp"] = int(tables[0].strftime("%s")) * 1000
+            temp["message"] = "User@Host: " + str(tables[1]) + \
+                "Query_time: " + str(tables[2]) + " Lock_time: " + str(tables[3]) + \
+                " Rows_sent: " + str(tables[4]) + " Rows_examined: " + str(tables[5]) +\
+                "Slow Query: " + str(tables[10])
+            cw_logs.append(temp)
+        if sequencetoken == None:
             response = client.put_log_events(
                                     logGroupName=rds_host_endpoint,
-                                    logStreamName=str(datetime.datetime.now()),
-                                    logEvents=cw_logs,
-                                    sequenceToken=sequencetoken
+                                    logStreamName=LOG_STREAM,
+                                    logEvents=cw_logs
                                     )
-
-            sequencetoken = response["nextSequenceToken"]
+        else:
+            response = client.put_log_events(
+                logGroupName=rds_host_endpoint,
+                logStreamName="test",
+                logEvents=cw_logs,
+                sequenceToken=sequencetoken
+            )
+        sequencetoken = response["nextSequenceToken"]
 
 
 if __name__ == '__main__':
