@@ -86,7 +86,7 @@ def rds_controller(rds_list):
         rds_username = item["Username"]
         rds_port = item["Port"]
         connection = pymysql.connect(host=rds_host_endpoint,
-                                    port=rds_port, user=rds_username, password="arbisoft321")
+                                    port=rds_port, user=rds_username)
         cursor = connection.cursor()
         cursor.execute("""
                       SELECT *
