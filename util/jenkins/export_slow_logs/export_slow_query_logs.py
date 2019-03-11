@@ -89,7 +89,8 @@ def rds_controller(rds_list, ca_ssl, username):
         rds_username = item["Username"]
         rds_port = item["Port"]
         db_name = item["name"]
-        token = client.generate_db_auth_token(rds_host, rds_port, db_name)
+        client_rds = RDSBotoWrapper(region_name=item["Region"])
+        token = client_rds.generate_db_auth_token(rds_host, rds_port, db_name)
         connection = pymysql.connect(host=rds_host_endpoint, user=username, 
                                      password=token, db=db_name, connect_timeout=5, ssl=ca_ssl)
         cursor = connection.cursor()
