@@ -44,6 +44,10 @@ class RDSBotoWrapper:
     def describe_db_instances(self):
         return self.client.describe_db_instances()
 
+    @backoff.on_exception(backoff.expo, ClientError, max_tries=MAX_TRIES)
+    def generate_db_auth_token(self, rds_host, port, db_name):
+        return self.generate_db_auth_token(rds_host, port, db_name)
+
 
 def rds_extractor():
     """
@@ -79,14 +83,15 @@ def rds_extractor():
     return rds_list
 
 
-def rds_controller(rds_list):
+def rds_controller(rds_list, ca_ssl, username):
     for item in rds_list:
-        if item["name"] == "ops-3026":
         rds_host_endpoint = item["Endpoint"]
         rds_username = item["Username"]
         rds_port = item["Port"]
-        connection = pymysql.connect(host=rds_host_endpoint,
-                                    port=rds_port, user=rds_username)
+        db_name = item["name"]
+        token = client.generate_db_auth_token(rds_host, rds_port, db_name)
+        connection = pymysql.connect(host=rds_host_endpoint, user=username, 
+                                     password=token, db=db_name, connect_timeout=5, ssl=ca_ssl)
         cursor = connection.cursor()
         cursor.execute("""
                       SELECT *
@@ -130,7 +135,14 @@ def rds_controller(rds_list):
         sequencetoken = response["nextSequenceToken"]
 
 
-if __name__ == '__main__':
+@click.command()
+@click.option('--ca_ssl', required=True, help='SSL certificate to speak with RDS')
+@click.option('--username', required=True, help='Username to speak with RDS')
+def main(ca_ssl, username):
     rds_list = rds_extractor()
-    rds_controller(rds_list)
+    rds_controller(rds_list, ca_ssl, username)
+
+
+if __name__ == '__main__':
+    main()
 
